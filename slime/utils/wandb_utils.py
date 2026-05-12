@@ -165,6 +165,10 @@ def init_wandb_secondary(args):
     # Configure settings based on offline/online mode
     if offline:
         settings_kwargs = dict(mode="offline")
+    elif getattr(args, "wandb_mode", None) == "online":
+        # Private wandb deployments may not support shared mode;
+        # fall back to online (each rank gets its own run context).
+        settings_kwargs = dict(mode="online")
     else:
         settings_kwargs = dict(
             mode="shared",
