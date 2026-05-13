@@ -177,14 +177,21 @@ def init_wandb_secondary(args):
         )
 
     init_kwargs = {
-        "id": wandb_run_id,
         "entity": args.wandb_team,
         "project": args.wandb_project,
         "config": args.__dict__,
-        "resume": "allow",
-        "reinit": True,
         "settings": wandb.Settings(**settings_kwargs),
     }
+
+    # For online mode (non-shared), create a separate run for this process
+    if settings_kwargs.get("mode") == "online":
+        init_kwargs["name"] = f"{getattr(args, 'wandb_group', 'train')}-RANK_{getattr(args, 'rank', 0)}"
+        init_kwargs["group"] = getattr(args, "wandb_group", None)
+    else:
+        # Shared mode: resume into the primary run
+        init_kwargs["id"] = wandb_run_id
+        init_kwargs["resume"] = "allow"
+        init_kwargs["reinit"] = True
 
     # Add custom directory if specified
     if args.wandb_dir:
