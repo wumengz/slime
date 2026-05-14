@@ -960,17 +960,11 @@ def policy_loss_function(
     entropy_loss = sum_of_sample_mean(entropy)
 
     # entropy percentiles (only on loss_mask=1 tokens, i.e. assistant tokens)
-    # NOTE: batch["loss_masks"] has been padded to total_length in get_batch(),
-    # but entropy is response-only (shape = sum(response_lengths)).
-    # Extract the response portion of each loss_mask to match.
+    # batch["loss_masks"] is a list of per-sample tensors, each shape [response_length_i]
+    # (the original response-only masks, NOT the padded full_loss_masks from get_batch).
+    # entropy is also response-only: shape [sum(response_lengths)].
     with torch.no_grad():
-        response_masks = []
-        for lm, tl, rl in zip(batch["loss_masks"], total_lengths, response_lengths):
-            # lm was padded to total_length: (prompt_length-1) zeros + response_length + 1 zero
-            # The response portion starts at (prompt_length - 1) and has length response_length
-            prompt_length = tl - rl
-            response_masks.append(lm[prompt_length - 1 : prompt_length - 1 + rl])
-        all_response_masks = torch.cat(response_masks, dim=0)
+        all_response_masks = torch.cat(batch["loss_masks"], dim=0)
         masked_entropy = entropy[all_response_masks > 0]
         if masked_entropy.numel() > 0:
             entropy_p90 = torch.quantile(masked_entropy.float(), 0.9).clone().detach()
