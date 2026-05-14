@@ -959,6 +959,16 @@ def policy_loss_function(
     entropy = torch.cat(entropy, dim=0)
     entropy_loss = sum_of_sample_mean(entropy)
 
+    # entropy percentiles (only on loss_mask=1 tokens, i.e. assistant tokens)
+    with torch.no_grad():
+        all_loss_masks = torch.cat(batch["loss_masks"], dim=0)
+        masked_entropy = entropy[all_loss_masks > 0]
+        if masked_entropy.numel() > 0:
+            entropy_p90 = torch.quantile(masked_entropy.float(), 0.9).clone().detach()
+            entropy_p95 = torch.quantile(masked_entropy.float(), 0.95).clone().detach()
+        else:
+            entropy_p90 = entropy_p95 = torch.tensor(0.0, device=entropy.device)
+
     loss = pg_loss - args.entropy_coef * entropy_loss
 
     if args.use_kl_loss:
@@ -990,6 +1000,8 @@ def policy_loss_function(
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
         "entropy_loss": entropy_loss.clone().detach(),
+        "entropy_p90": entropy_p90,
+        "entropy_p95": entropy_p95,
         "pg_clipfrac": pg_clipfrac.clone().detach(),
         "ppo_kl": ppo_kl.clone().detach(),
     }
