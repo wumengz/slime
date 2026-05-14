@@ -994,6 +994,13 @@ def policy_loss_function(
         "ppo_kl": ppo_kl.clone().detach(),
     }
 
+    # Entropy percentiles on assistant tokens (loss_mask=1) for monitoring diversity
+    with torch.no_grad():
+        _mask = torch.cat(batch["loss_masks"]) > 0
+        _ent = entropy[_mask] if _mask.any() else entropy[:0]
+        reported_loss["entropy_p90"] = torch.quantile(_ent.float(), 0.9) if _ent.numel() > 0 else loss.new_tensor(0.0)
+        reported_loss["entropy_p95"] = torch.quantile(_ent.float(), 0.95) if _ent.numel() > 0 else loss.new_tensor(0.0)
+
     if train_rollout_logprob_abs_diff is not None:
         reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
 
