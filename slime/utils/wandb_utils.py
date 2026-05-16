@@ -58,6 +58,13 @@ def init_wandb_primary(args):
         "config": _compute_config_for_logging(args),
     }
 
+    # Resume into previous wandb run if checkpoint contains a saved run_id
+    saved_run_id = _load_wandb_run_id(getattr(args, "load", None))
+    if saved_run_id:
+        init_kwargs["id"] = saved_run_id
+        init_kwargs["resume"] = "allow"
+        logger.info(f"Resuming wandb run: {saved_run_id}")
+
     # Configure settings based on offline/online mode
     if offline:
         init_kwargs["settings"] = wandb.Settings(mode="offline")
@@ -77,6 +84,10 @@ def init_wandb_primary(args):
 
     # Set wandb_run_id in args for easy access throughout the training process
     args.wandb_run_id = wandb.run.id
+
+    # Persist run_id to checkpoint dir so resume can continue the same run
+    if getattr(args, "save", None):
+        _save_wandb_run_id(args.save, wandb.run.id)
 
 
 def reinit_wandb_primary_with_open_metrics(args, router_addr):
@@ -213,3 +224,32 @@ def _init_wandb_common():
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
     wandb.define_metric("perf/*", step_metric="rollout/step")
+
+
+_WANDB_RUN_ID_FILE = "wandb_run_id.txt"
+
+
+def _save_wandb_run_id(save_dir: str, run_id: str):
+    """Persist wandb run_id to checkpoint dir for resume."""
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        path = os.path.join(save_dir, _WANDB_RUN_ID_FILE)
+        with open(path, "w") as f:
+            f.write(run_id)
+    except Exception as e:
+        logger.warning(f"Failed to save wandb run_id: {e}")
+
+
+def _load_wandb_run_id(load_dir: str | None) -> str | None:
+    """Load wandb run_id from checkpoint dir if available."""
+    if not load_dir:
+        return None
+    path = os.path.join(load_dir, _WANDB_RUN_ID_FILE)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            run_id = f.read().strip()
+        return run_id if run_id else None
+    except Exception:
+        return None
