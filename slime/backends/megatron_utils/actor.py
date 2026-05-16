@@ -157,6 +157,11 @@ class MegatronTrainRayActor(TrainRayActor):
     def sleep(self) -> None:
         assert self.args.offload_train
 
+        # Idempotent guard: skip if already sleeping (fixes #1895 double-sleep crash)
+        if getattr(self, '_is_sleeping', False):
+            logger.info("sleep() skipped: already sleeping")
+            return
+
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
         if (
@@ -168,19 +173,30 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.disconnect_rollout_engines()
         destroy_process_groups()
 
+        # Drain GPU memory before pause to avoid unmapping cached CCA segments
+        torch.cuda.empty_cache()
+
         torch_memory_saver.pause()
 
+        self._is_sleeping = True
         print_memory("after offload model")
 
     @timer
     def wake_up(self) -> None:
         assert self.args.offload_train
+
+        # Idempotent guard: skip if already awake (fixes #1895)
+        if not getattr(self, '_is_sleeping', True):
+            logger.info("wake_up() skipped: already awake")
+            return
+
         print_memory("before wake_up model")
 
         torch_memory_saver.resume()
 
         clear_memory()
         reload_process_groups()
+        self._is_sleeping = False
         print_memory("after wake_up model")
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
