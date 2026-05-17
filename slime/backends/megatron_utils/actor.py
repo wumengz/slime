@@ -550,6 +550,9 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return
 
+        # Free GPU cache before save to avoid OOM during tensor.to("cpu")
+        torch.cuda.empty_cache()
+
         # torch dist may trigger nccl communication during saving.
         if self.args.offload_train:
             self.wake_up()
