@@ -436,6 +436,7 @@ def get_log_probs_and_entropy(
         tp_group,
         with_entropy=with_entropy,
         chunk_size=chunk_size,
+        entropy_no_grad=with_entropy and args.entropy_coef == 0,
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 

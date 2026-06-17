@@ -646,7 +646,14 @@ def chunked_gae(
     return advantages, returns
 
 
-def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1):
+def calculate_log_probs_and_entropy(
+    logits,
+    tokens,
+    tp_group,
+    with_entropy: bool = False,
+    chunk_size: int = -1,
+    entropy_no_grad: bool = False,
+):
     logits = logits.contiguous()
     entropy = None
     if logits.size(0) != 0:
@@ -657,9 +664,15 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
 
             if with_entropy:
                 entropys = []
-                for logits_chunk in logits_chunks:
-                    entropy_input = logits_chunk.clone()
-                    entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
+                if entropy_no_grad:
+                    with torch.no_grad():
+                        for logits_chunk in logits_chunks:
+                            entropy_input = logits_chunk.detach().clone()
+                            entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
+                else:
+                    for logits_chunk in logits_chunks:
+                        entropy_input = logits_chunk.clone()
+                        entropys.append(compute_entropy_from_logits(entropy_input, tp_group))
                 entropy = torch.cat(entropys, dim=0)
 
             log_probs = []
@@ -669,8 +682,13 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
             log_prob = torch.cat(log_probs, dim=0)
         else:
             if with_entropy:
-                entropy_input = logits.clone()
-                entropy = compute_entropy_from_logits(entropy_input, tp_group)
+                if entropy_no_grad:
+                    with torch.no_grad():
+                        entropy_input = logits.detach().clone()
+                        entropy = compute_entropy_from_logits(entropy_input, tp_group)
+                else:
+                    entropy_input = logits.clone()
+                    entropy = compute_entropy_from_logits(entropy_input, tp_group)
 
             log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
     else:
