@@ -469,6 +469,32 @@ def get_log_probs_and_entropy(
     return torch.empty((0,), device=device), res
 
 
+def _local_entropy_loss_masks(
+    args: Namespace,
+    total_lengths: list[int],
+    response_lengths: list[int],
+    loss_masks: list[torch.Tensor],
+    max_seq_lens: list[int] | None,
+) -> list[torch.Tensor]:
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size == 1 or args.allgather_cp:
+        return loss_masks
+
+    local_masks: list[torch.Tensor] = []
+    for i, (total_length, response_length, loss_mask) in enumerate(
+        zip(total_lengths, response_lengths, loss_masks, strict=False)
+    ):
+        max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+        prompt_length = total_length - response_length
+        _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
+            total_length, response_length, args.qkv_format, max_seq_len
+        )
+        loss_mask_0 = loss_mask[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+        loss_mask_1 = loss_mask[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+        local_masks.append(torch.cat([loss_mask_0, loss_mask_1], dim=0))
+    return local_masks
+
+
 def get_values(
     logits: torch.Tensor,
     *,
@@ -956,8 +982,8 @@ def policy_loss_function(
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
+    entropy_segments = log_probs_and_entropy["entropy"]
+    entropy = torch.cat(entropy_segments, dim=0)
     entropy_loss = sum_of_sample_mean(entropy)
 
     loss = pg_loss - args.entropy_coef * entropy_loss
@@ -997,8 +1023,21 @@ def policy_loss_function(
 
     # Entropy percentiles on assistant tokens (loss_mask=1) for monitoring diversity
     with torch.no_grad():
-        _mask = torch.cat(batch["loss_masks"]) > 0
-        _ent = entropy[_mask] if _mask.any() else entropy[:0]
+        _mask_segments = _local_entropy_loss_masks(
+            args,
+            batch["total_lengths"],
+            batch["response_lengths"],
+            batch["loss_masks"],
+            batch.get("max_seq_lens", None),
+        )
+        _ent_parts = []
+        for _ent_segment, _mask_segment in zip(entropy_segments, _mask_segments, strict=False):
+            _mask_segment = _mask_segment.to(device=_ent_segment.device, dtype=torch.bool)
+            if _ent_segment.numel() != _mask_segment.numel():
+                _ent_parts.append(_ent_segment)
+            elif _mask_segment.any():
+                _ent_parts.append(_ent_segment[_mask_segment])
+        _ent = torch.cat(_ent_parts, dim=0) if _ent_parts else entropy[:0]
         reported_loss["entropy_p90"] = torch.quantile(_ent.float(), 0.9) if _ent.numel() > 0 else loss.new_tensor(0.0)
         reported_loss["entropy_p95"] = torch.quantile(_ent.float(), 0.95) if _ent.numel() > 0 else loss.new_tensor(0.0)
 
